@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flappy Bird - Epic Boss Final</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #87CEEB;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameContainer {
+            position: relative;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #000;
+            background: #87CEEB;
+        }
+        
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 24px;
+            color: white;
+            text-shadow: 2px 2px 0 #000;
+        }
+        
+        #coins {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 24px;
+            color: gold;
+            text-shadow: 2px 2px 0 #000;
+        }
+        
+        #level {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            font-size: 20px;
+            color: #FFD700;
+            text-shadow: 2px 2px 0 #000;
+        }
+        
+        #bossHealth {
+            position: absolute;
+            top: 80px;
+            left: 10px;
+            font-size: 18px;
+            color: #FF0000;
+            text-shadow: 2px 2px 0 #000;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="score">Score: 0</div>
+        <div id="coins">Coins: 0</div>
+        <div id="level">Level: 1</div>
+        <div id="bossHealth"></div>
+    </div>
+
+    <script>
+        // Получаем элементы
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const coinsElement = document.getElementById('coins');
+        const levelElement = document.getElementById('level');
+        const bossHealthElement = document.getElementById('bossHealth');
+
+        // Настройки игры
+        const config = {
+            gravity: 0.3,
+            jumpForce: -6.5,
+            pipeSpeed: 2,
+            pipeGap: 200,
+            pipeWidth: 70,
+            pipeInterval: 2200,
+            coinSpawnChance: 0.6,
+            maxFallSpeed: 8,
+            rotationSpeed: 0.1,
+            winScore: 50 // Для теста поставим 50, потом можешь поменять на 9999
+        };
+
+        // Состояние игры
+        let gameState = {
+            bird: { 
+                x: 100, 
+                y: 300, 
+                width: 40, 
+                height: 30,
+                velocity: 0,
+                wingPosition: 0,
+                rotation: 0
+            },
+            pipes: [],
+            coins: [],
+            score: 0,
+            coinsCollected: 0,
+            level: 1,
+            gameOver: false,
+            gameWon: false,
+            lastPipeTime: 0,
+            boss: null
+        };
+
+        // Система уровней
+        const levels = {
+            1: { pipeSpeed: 2, pipeGap: 200, gravity: 0.3, pipeInterval: 2200 },
+            2: { pipeSpeed: 2.3, pipeGap: 190, gravity: 0.32, pipeInterval: 2100 },
+            3: { pipeSpeed: 2.6, pipeGap: 180, gravity: 0.34, pipeInterval: 2000 },
+            4: { pipeSpeed: 2.9, pipeGap: 170, gravity: 0.36, pipeInterval: 1900 },
+            5: { pipeSpeed: 3.2, pipeGap: 160, gravity: 0.38, pipeInterval: 1800 }
+        };
+
+        function updateLevel() {
+            const newLevel = Math.floor(gameState.score / 5) + 1;
+            if (newLevel > gameState.level) {
+                gameState.level = newLevel;
+                levelElement.textContent = `Level: ${gameState.level}`;
+                
+                const levelSettings = levels[Math.min(newLevel, 5)] || levels[5];
+                Object.assign(config, levelSettings);
+            }
+        }
+
+        // БОСС-СИСТЕМА
+        function createBoss() {
+            bossHealthElement.style.display = 'block';
+            return {
+                x: canvas.width,
+                health: 100,
+                maxHealth: 100,
+                phase: 1,
+                attackCooldown: 0,
+                movingUp: true,
+                y: canvas.height / 2,
+                speed: 1.5,
+                lasers: []
+            };
+        }
+
+        function updateBoss() {
+            if (!gameState.boss) return;
+
+            const boss = gameState.boss;
+            
+            // Движение босса
+            if (boss.movingUp) {
+                boss.y -= boss.speed;
+                if (boss.y < 100) boss.movingUp = false;
+            } else {
+                boss.y += boss.speed;
+                if (boss.y > canvas.height - 100) boss.movingUp = true;
+            }
+
+            // Атаки босса
+            boss.attackCooldown--;
+            if (boss.attackCooldown <= 0) {
+                createBossAttack();
+                boss.attackCooldown = 60;
+            }
+
+            // Обновление лазеров
+            updateBossLasers();
+            
+            // Проверка столкновения с боссом
+            if (checkBossCollision()) {
+                gameState.boss.health -= 10;
+                if (gameState.boss.health <= 0) {
+                    if (boss.phase === 1) {
+                        boss.phase = 2;
+                        boss.health = 50;
+                        boss.speed = 2;
+                        boss.maxHealth = 50;
+                    } else {
+                        gameState.gameWon = true;
+                        gameState.gameOver = true;
+                    }
+                }
+                updateBossHealth();
+            }
+        }
+
+        function createBossAttack() {
+            const boss = gameState.boss;
+            gameState.boss.lasers.push({
+                x: boss.x,
+                y: boss.y,
+                speedX: -4,
+                speedY: 0
+            });
+        }
+
+        function updateBossLasers() {
+            const boss = gameState.boss;
+            for (let i = boss.lasers.length - 1; i >= 0; i--) {
+                const laser = boss.lasers[i];
+                laser.x += laser.speedX;
+                laser.y += laser.speedY;
+                
+                if (checkLaserCollision(laser)) {
+                    gameState.gameOver = true;
+                    return;
+                }
+                
+                if (laser.x < -10) {
+                    boss.lasers.splice(i, 1);
+                }
+            }
+        }
+
+        function checkBossCollision() {
+            const bird = gameState.bird;
+            const boss = gameState.boss;
+            
+            return (bird.x < boss.x + 100 &&
+                    bird.x + bird.width > boss.x &&
+                    bird.y < boss.y + 100 &&
+                    bird.y + bird.height > boss.y);
+        }
+
+        function checkLaserCollision(laser) {
+            const bird = gameState.bird;
+            const distance = Math.sqrt(
+                Math.pow(bird.x + bird.width/2 - laser.x, 2) + 
+                Math.pow(bird.y + bird.height/2 - laser.y, 2)
+            );
+            return distance < 20;
+        }
+
+        function updateBossHealth() {
+            const boss = gameState.boss;
+            const healthPercent = (boss.health / boss.maxHealth) * 100;
+            bossHealthElement.textContent = `BOSS: ${healthPercent.toFixed(0)}%`;
+        }
+
+        function drawBoss() {
+            const boss = gameState.boss;
+            if (!boss) return;
+
+            // Тело босса
+            ctx.fillStyle = boss.phase === 1 ? '#8B0000' : '#FF0000';
+            ctx.fillRect(boss.x, boss.y, 100, 100);
+            
+            // Глаза босса
+            ctx.fillStyle = '#FFFF00';
+            ctx.beginPath();
+            ctx.arc(boss.x + 25, boss.y + 35, 15, 0, Math.PI * 2);
+            ctx.arc(boss.x + 75, boss.y + 35, 15, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            ctx.arc(boss.x + 25, boss.y + 35, 7, 0, Math.PI * 2);
+            ctx.arc(boss.x + 75, boss.y + 35, 7, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Рисуем лазеры
+            ctx.fillStyle = '#00FFFF';
+            boss.lasers.forEach(laser => {
+                ctx.beginPath();
+                ctx.arc(laser.x, laser.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // ОСНОВНЫЕ ФУНКЦИИ ИГРЫ
+        function drawBird() {
+            const bird = gameState.bird;
+            
+            ctx.save();
+            ctx.translate(bird.x + bird.width / 2, bird.y + bird.height / 2);
+            
+            let rotation = bird.velocity * config.rotationSpeed;
+            rotation = Math.max(-0.5, Math.min(0.5, rotation));
+            ctx.rotate(rotation);
+            
+            // Тело птички
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(-bird.width / 2, -bird.height / 2, bird.width, bird.height);
+            
+            // Голова
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(bird.width / 2 - 5, -bird.height / 2 + 10, 12, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Крылья
+            ctx.fillStyle = '#FF8C00';
+            const wingHeight = 12 + Math.sin(bird.wingPosition) * 8;
+            ctx.beginPath();
+            ctx.ellipse(-bird.width / 2 + 15, 0, 18, wingHeight, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Глаз
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(bird.width / 2 - 2, -bird.height / 2 + 8, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(bird.width / 2 - 1, -bird.height / 2 + 7, 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Клюв
+            ctx.fillStyle = '#FF4500';
+            ctx.beginPath();
+            ctx.moveTo(bird.width / 2 + 2, -bird.height / 2 + 10);
+            ctx.lineTo(bird.width / 2 + 15, -bird.height / 2 + 10);
+            ctx.lineTo(bird.width / 2 + 2, -bird.height / 2 + 15);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+
+        function drawPipe(x, topHeight, bottomY) {
+            // Верхняя труба
+            ctx.fillStyle = '#228B22';
+            ctx.fillRect(x, 0, config.pipeWidth, topHeight);
+            
+            // Нижняя труба
+            ctx.fillStyle = '#228B22';
+            ctx.fillRect(x, bottomY, config.pipeWidth, canvas.height - bottomY);
+        }
+
+        function drawCoin(coin) {
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(coin.x, coin.y, coin.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#FFA500';
+            ctx.beginPath();
+            ctx.arc(coin.x, coin.y, coin.radius - 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawBackground() {
+            // Небо
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Земля
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
+            
+            // Трава
+            ctx.fillStyle = '#32CD32';
+            ctx.fillRect(0, canvas.height - 30, canvas.width, 5);
+        }
+
+        function init() {
+            gameState = {
+                bird: { 
+                    x: 100, 
+                    y: 300, 
+                    width: 40, 
+                    height: 30,
+                    velocity: 0,
+                    wingPosition: 0,
+                    rotation: 0
+                },
+                pipes: [],
+                coins: [],
+                score: 0,
+                coinsCollected: 0,
+                level: 1,
+                gameOver: false,
+                gameWon: false,
+                lastPipeTime: 0,
+                boss: null
+            };
+            scoreElement.textContent = 'Score: 0';
+            coinsElement.textContent = 'Coins: 0';
+            levelElement.textContent = 'Level: 1';
+            bossHealthElement.style.display = 'none';
+            
+            Object.assign(config, levels[1]);
+        }
+
+        function jump() {
+            if (!gameState.gameOver) {
+                gameState.bird.velocity = config.jumpForce;
+            }
+        }
+
+        function createPipe() {
+            const minHeight = 80;
+            const maxHeight = canvas.height - config.pipeGap - minHeight - 30;
+            const topHeight = Math.random() * (maxHeight - minHeight) + minHeight;
+            
+            const newPipe = {
+                x: canvas.width,
+                topHeight: topHeight,
+                bottomY: topHeight + config.pipeGap,
+                passed: false
+            };
+            
+            gameState.pipes.push(newPipe);
+            
+            if (Math.random() < config.coinSpawnChance) {
+                gameState.coins.push({
+                    x: canvas.width + config.pipeWidth / 2,
+                    y: topHeight + config.pipeGap / 2,
+                    radius: 8,
+                    collected: false
+                });
+            }
+        }
+
+        function checkCollision(bird, pipe) {
+            const birdRight = bird.x + bird.width;
+            const birdBottom = bird.y + bird.height;
+            const pipeRight = pipe.x + config.pipeWidth;
+            
+            if (birdRight > pipe.x && 
+                bird.x < pipeRight && 
+                bird.y < pipe.topHeight) {
+                return true;
+            }
+            
+            if (birdRight > pipe.x && 
+                bird.x < pipeRight && 
+                birdBottom > pipe.bottomY) {
+                return true;
+            }
+            
+            return false;
+        }
+
+        function checkCoinCollision(bird, coin) {
+            if (coin.collected) return false;
+            
+            const birdCenterX = bird.x + bird.width / 2;
+            const birdCenterY = bird.y + bird.height / 2;
+            const distance = Math.sqrt(
+                Math.pow(birdCenterX - coin.x, 2) + 
+                Math.pow(birdCenterY - coin.y, 2)
+            );
+            
+            return distance < (bird.width / 2 + coin.radius);
+        }
+
+        function update(currentTime) {
+            if (gameState.gameOver) return;
+            
+            const bird = gameState.bird;
+            
+            bird.wingPosition += 0.3;
+            bird.velocity += config.gravity;
+            bird.y += bird.velocity;
+            
+            if (bird.velocity > config.maxFallSpeed) {
+                bird.velocity = config.maxFallSpeed;
+            }
+            
+            updateLevel();
+            
+            if (gameState.score >= config.winScore && !gameState.boss) {
+                gameState.boss = createBoss();
+            }
+            
+            if (gameState.boss) {
+                updateBoss();
+            } else {
+                if (currentTime - gameState.lastPipeTime > config.pipeInterval) {
+                    createPipe();
+                    gameState.lastPipeTime = currentTime;
+                }
+                
+                for (let i = gameState.pipes.length - 1; i >= 0; i--) {
+                    const pipe = gameState.pipes[i];
+                    pipe.x -= config.pipeSpeed;
+                    
+                    if (checkCollision(bird, pipe)) {
+                        gameState.gameOver = true;
+                        return;
+                    }
+                    
+                    if (!pipe.passed && pipe.x + config.pipeWidth < bird.x) {
+                        pipe.passed = true;
+                        gameState.score++;
+                        scoreElement.textContent = `Score: ${gameState.score}`;
+                    }
+                    
+                    if (pipe.x + config.pipeWidth < 0) {
+                        gameState.pipes.splice(i, 1);
+                    }
+                }
+                
+                for (let i = gameState.coins.length - 1; i >= 0; i--) {
+                    const coin = gameState.coins[i];
+                    coin.x -= config.pipeSpeed;
+                    
+                    if (!coin.collected && checkCoinCollision(bird, coin)) {
+                        coin.collected = true;
+                        gameState.coinsCollected++;
+                        coinsElement.textContent = `Coins: ${gameState.coinsCollected}`;
+                    }
+                    
+                    if (coin.x + coin.radius < 0) {
+                        gameState.coins.splice(i, 1);
+                    }
+                }
+            }
+            
+            if (bird.y < -20 || bird.y + bird.height > canvas.height - 25) {
+                gameState.gameOver = true;
+            }
+        }
+
+        function draw() {
+            drawBackground();
+            
+            if (gameState.boss) {
+                drawBoss();
+            } else {
+                gameState.pipes.forEach(pipe => {
+                    drawPipe(pipe.x, pipe.topHeight, pipe.bottomY);
+                });
+                
+                gameState.coins.forEach(coin => {
+                    if (!coin.collected) {
+                        drawCoin(coin);
+                    }
+                });
+            }
+            
+            drawBird();
+            
+            if (gameState.gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = 'white';
+                ctx.font = '36px Arial';
+                ctx.textAlign = 'center';
+                
+                if (gameState.gameWon) {
+                    ctx.fillText('EPIC VICTORY!', canvas.width / 2, canvas.height / 2 - 60);
+                    ctx.font = '24px Arial';
+                    ctx.fillText('You defeated the Final Boss!', canvas.width / 2, canvas.height / 2 - 20);
+                    ctx.fillText(`Final Score: ${gameState.score}`, canvas.width / 2, canvas.height / 2 + 10);
+                    ctx.fillText(`Coins: ${gameState.coinsCollected}`, canvas.width / 2, canvas.height / 2 + 40);
+                    ctx.fillText('Click to play again', canvas.width / 2, canvas.height / 2 + 80);
+                } else {
+                    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 60);
+                    ctx.font = '24px Arial';
+                    ctx.fillText(`Score: ${gameState.score}`, canvas.width / 2, canvas.height / 2 - 20);
+                    ctx.fillText(`Coins: ${gameState.coinsCollected}`, canvas.width / 2, canvas.height / 2 + 10);
+                    ctx.fillText(`Level: ${gameState.level}`, canvas.width / 2, canvas.height / 2 + 40);
+                    ctx.fillText('Click to restart', canvas.width / 2, canvas.height / 2 + 80);
+                }
+                ctx.textAlign = 'left';
+            }
+        }
+
+        // ОБРАБОТЧИКИ СОБЫТИЙ
+        canvas.addEventListener('click', function() {
+            if (gameState.gameOver) {
+                init();
+            } else {
+                jump();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                if (gameState.gameOver) {
+                    init();
+                } else {
+                    jump();
+                }
+            }
+        });
+
+        // ИГРОВОЙ ЦИКЛ
+        let lastTime = 0;
+        function gameLoop(timestamp) {
+            update(timestamp);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        init();
+        gameLoop(0);
+    </script>
+</body>
+</html>
